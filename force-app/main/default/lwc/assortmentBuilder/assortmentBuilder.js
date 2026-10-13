@@ -2,10 +2,9 @@ import { LightningElement, api, wire } from "lwc";
 import { CurrentPageReference } from "lightning/navigation";
 import { ProductAdapter } from "commerce/productApi";
 import { SessionContextAdapter, AppContextAdapter } from "commerce/contextApi";
-import { refreshCartSummary } from "commerce/cartApi";
+import { addItemToCart, refreshCartSummary } from "commerce/cartApi";
 import Toast from "lightning/toast";
 import getVariantPrices from "@salesforce/apex/AssortmentBuilderController.getVariantPrices";
-import addToCart from "@salesforce/apex/AssortmentBuilderController.addToCart";
 import {
   normalizeAxes,
   buildVariantMap,
@@ -20,7 +19,10 @@ import {
  * Prices are fetched ONCE for every mapped child (buyer-aware flat unit price; the
  * ConnectApi pricing has no quantity field — ruling R1), so changing a quantity only
  * recomputes the running total on the client, never re-hits the server. Add to Cart
- * sends all non-zero cells in a single server call that loops the singular add (R2).
+ * loops the storefront-native commerce/cartApi add once per non-zero cell (R2 — no bulk
+ * add API); the client module binds to the shopper's ACTIVE cart, so items land in the
+ * existing cart rather than attempting to create a new one. Non-atomic: a line that
+ * fails leaves the earlier lines in the cart and is reported, not rolled back.
  * Quantity inputs honor the product's purchaseQuantityRule when present (R4).
  */
 export default class AssortmentBuilder extends LightningElement {
@@ -254,21 +256,37 @@ export default class AssortmentBuilder extends LightningElement {
     const items = Object.keys(this.quantities)
       .filter((id) => this.quantities[id] > 0)
       .map((id) => ({ productId: id, quantity: this.quantities[id] }));
+    const requested = items.length;
     this._busy = true;
-    addToCart({
-      webstoreId: this.webstoreId,
-      effectiveAccountId: this.effectiveAccountId,
-      items,
-    })
-      .then((res) => {
-        // Apex addToCart catches per-line failures and resolves normally (never throws),
-        // so success is NOT implied by reaching .then — it's implied by itemsAdded.
+
+    // Loop the storefront-native add once per non-zero cell, sequentially so the
+    // concurrent writes don't race on the same active cart. Each call binds to the
+    // shopper's active cart (no cart creation), fixing the "new cart can be created
+    // only when there are no current carts" error the server-side path hit.
+    let added = 0;
+    let firstError = null;
+    const chain = items.reduce(
+      (p, it) =>
+        p.then(() =>
+          addItemToCart(it.productId, it.quantity).then(
+            () => {
+              added += 1;
+            },
+            (e) => {
+              if (!firstError) {
+                firstError = this.errorMessage(e);
+              }
+            }
+          )
+        ),
+      Promise.resolve()
+    );
+
+    chain
+      .then(() => {
         this._busy = false;
         refreshCartSummary();
-        const requested = items.length;
-        const added = res && typeof res.itemsAdded === "number" ? res.itemsAdded : 0;
-        const err = (res && res.error) || "";
-        if (added >= requested && !err) {
+        if (added >= requested) {
           // full success — safe to clear the grid
           Toast.show(
             { label: "Added to cart", message: `${added} item(s) added.`, variant: "success" },
@@ -280,7 +298,7 @@ export default class AssortmentBuilder extends LightningElement {
           Toast.show(
             {
               label: "Partially added",
-              message: `${added} of ${requested} item(s) added.${err ? ` ${err}` : ""}`,
+              message: `${added} of ${requested} item(s) added.${firstError ? ` ${firstError}` : ""}`,
               variant: "warning",
             },
             this
@@ -290,7 +308,7 @@ export default class AssortmentBuilder extends LightningElement {
           Toast.show(
             {
               label: "Couldn't add to cart",
-              message: err || "No items were added. Please try again.",
+              message: firstError || "No items were added. Please try again.",
               variant: "error",
             },
             this
@@ -306,6 +324,17 @@ export default class AssortmentBuilder extends LightningElement {
           this
         );
       });
+  }
+
+  // Best-effort human-readable message out of a commerce/cartApi rejection.
+  errorMessage(e) {
+    if (!e) {
+      return "";
+    }
+    if (typeof e === "string") {
+      return e;
+    }
+    return (e.body && e.body.message) || e.message || "";
   }
 
   handleClear() {

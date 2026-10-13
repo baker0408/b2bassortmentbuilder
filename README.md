@@ -90,10 +90,13 @@ Set these in the Experience Builder property panel:
 - **Promotions apply at checkout, not in the grid.** Cart- and order-level
   promotions are evaluated by the cart/checkout, so the grid total is a
   pre-promotion estimate. The component says so inline.
-- **Add to Cart is not atomic.** It loops the singular `addItemToCart` once per
-  non-zero cell (there is no bulk-add API in v67 ConnectApi). If one line fails
-  mid-loop, the lines added before it stay in the cart; the component reports how
-  many were added and surfaces the first error.
+- **Add to Cart uses the storefront's own cart.** It calls the native
+  `commerce/cartApi` add once per non-zero cell, which binds to the shopper's
+  **active** cart — so items land in the existing cart (not a new one).
+- **Add to Cart is not atomic.** There is no bulk-add API, so the cells are added
+  one at a time (sequentially, to avoid racing the cart). If one line fails, the
+  lines added before it stay in the cart; the component reports how many were added,
+  surfaces the first error, and keeps your quantities so you can retry.
 - **Two axes maximum.** A product with three or more variation axes renders the
   first two and shows a note.
 

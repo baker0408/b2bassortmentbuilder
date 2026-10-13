@@ -7,11 +7,10 @@ jest.mock(
   { virtual: true }
 );
 jest.mock(
-  "@salesforce/apex/AssortmentBuilderController.addToCart",
-  () => ({ default: jest.fn(() => Promise.resolve({ itemsAdded: 0 })) }),
+  "commerce/cartApi",
+  () => ({ addItemToCart: jest.fn(() => Promise.resolve()), refreshCartSummary: jest.fn() }),
   { virtual: true }
 );
-jest.mock("commerce/cartApi", () => ({ refreshCartSummary: jest.fn() }), { virtual: true });
 jest.mock(
   "commerce/contextApi",
   () => {
@@ -46,7 +45,7 @@ jest.mock(
 );
 
 import getVariantPrices from "@salesforce/apex/AssortmentBuilderController.getVariantPrices";
-import addToCart from "@salesforce/apex/AssortmentBuilderController.addToCart";
+import { addItemToCart } from "commerce/cartApi";
 import Toast from "lightning/toast";
 import { SessionContextAdapter, AppContextAdapter } from "commerce/contextApi";
 
@@ -205,7 +204,7 @@ describe("c-assortment-builder", () => {
       });
   });
 
-  it("adds only the non-zero variants to the cart in one call", () => {
+  it("adds each non-zero variant to the active cart via commerce/cartApi", () => {
     const el = createElement("c-assortment-builder", { is: AssortmentBuilder });
     document.body.appendChild(el);
     el.applyVariationForTest(VARIATION);
@@ -220,18 +219,18 @@ describe("c-assortment-builder", () => {
         el.shadowRoot.querySelector(".ab-add").click();
         return flush();
       })
+      .then(() => flush())
       .then(() => {
-        expect(addToCart).toHaveBeenCalledTimes(1);
-        const arg = addToCart.mock.calls[0][0];
-        expect(arg.items).toEqual([{ productId: "01tSMLBLK", quantity: 3 }]);
+        // client-side add binds to the shopper's active cart; one call per non-zero cell
+        expect(addItemToCart).toHaveBeenCalledTimes(1);
+        expect(addItemToCart).toHaveBeenCalledWith("01tSMLBLK", 3);
       });
   });
 
-  // C1: Apex addToCart swallows per-line exceptions and resolves normally, so the LWC
-  // .then always runs. A result of itemsAdded:0 is a FAILURE, not a success — it must
-  // surface the error and keep the buyer's quantities, not toast success and clear.
-  it("reports an error and retains quantities when nothing was added", () => {
-    addToCart.mockResolvedValueOnce({ itemsAdded: 0, cartId: null, error: "Out of stock" });
+  // C1: a rejected add is a FAILURE — surface the error and keep the buyer's quantities,
+  // never toast success and clear.
+  it("reports an error and retains quantities when the only add fails", () => {
+    addItemToCart.mockRejectedValueOnce(new Error("Out of stock"));
     const el = createElement("c-assortment-builder", { is: AssortmentBuilder });
     document.body.appendChild(el);
     el.applyVariationForTest(VARIATION);
@@ -246,19 +245,21 @@ describe("c-assortment-builder", () => {
         el.shadowRoot.querySelector(".ab-add").click();
         return flush();
       })
+      .then(() => flush())
       .then(() => {
         expect(Toast.show).toHaveBeenCalledTimes(1);
         expect(Toast.show.mock.calls[0][0].variant).toBe("error");
         expect(Toast.show.mock.calls[0][0].message).toContain("Out of stock");
-        // quantities retained -> the cell still holds 3 and Add stays enabled
         const input = el.shadowRoot.querySelector('input.ab-qty[data-child-id="01tSMLBLK"]');
-        expect(Number(input.value)).toBe(3);
+        expect(Number(input.value)).toBe(3); // retained
         expect(el.shadowRoot.querySelector(".ab-add").disabled).toBe(false);
       });
   });
 
-  it("reports a partial-success warning and retains quantities when some lines fail", () => {
-    addToCart.mockResolvedValueOnce({ itemsAdded: 1, cartId: "cart1", error: "1 line failed" });
+  it("reports a partial-success warning and retains quantities when one of several lines fails", () => {
+    addItemToCart
+      .mockResolvedValueOnce() // 01tSMLBLK ok
+      .mockRejectedValueOnce(new Error("1 line failed")); // 01tMEDBLK fails
     const el = createElement("c-assortment-builder", { is: AssortmentBuilder });
     document.body.appendChild(el);
     el.applyVariationForTest(VARIATION);
@@ -276,16 +277,17 @@ describe("c-assortment-builder", () => {
         el.shadowRoot.querySelector(".ab-add").click();
         return flush();
       })
+      .then(() => flush())
+      .then(() => flush())
       .then(() => {
+        expect(addItemToCart).toHaveBeenCalledTimes(2);
         expect(Toast.show).toHaveBeenCalledTimes(1);
         expect(Toast.show.mock.calls[0][0].variant).toBe("warning");
-        // quantities retained so the buyer can retry the failed line
-        expect(el.shadowRoot.querySelector(".ab-add").disabled).toBe(false);
+        expect(el.shadowRoot.querySelector(".ab-add").disabled).toBe(false); // retained
       });
   });
 
   it("toasts success and clears the grid only when all lines are added", () => {
-    addToCart.mockResolvedValueOnce({ itemsAdded: 1, cartId: "cart1", error: null });
     const el = createElement("c-assortment-builder", { is: AssortmentBuilder });
     document.body.appendChild(el);
     el.applyVariationForTest(VARIATION);
@@ -300,6 +302,7 @@ describe("c-assortment-builder", () => {
         el.shadowRoot.querySelector(".ab-add").click();
         return flush();
       })
+      .then(() => flush())
       .then(() => {
         expect(Toast.show.mock.calls[0][0].variant).toBe("success");
         expect(el.shadowRoot.querySelector(".ab-add").disabled).toBe(true); // cleared

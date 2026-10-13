@@ -7,10 +7,11 @@
  * returns the buyer-aware unit price per child; the running total is Σ(unitPrice×qty)
  * on the client. Promotions remain cart-time.
  *
- * Cart (ruling R2): there is no bulk-add input type in this org's v67 ConnectApi, so
- * addToCart loops the singular CommerceCart.addItemToCart once per non-zero line in a
- * single server round-trip. Non-atomic: it reports how many lines were added and the
- * first error, and does not roll back a partial add.
+ * Cart: add-to-cart is handled entirely on the client via the storefront-native
+ * commerce/cartApi module, which binds to the shopper's active cart. There is no Apex
+ * cart path here — a server-side ConnectApi.CommerceCart.addItemToCart with the 'active'
+ * keyword does not bind to the existing cart and attempts to create a new one, which
+ * fails when the shopper already has a cart.
  *
  * Field shapes confirmed live — see docs/API-NOTES.md.
  */
@@ -20,17 +21,6 @@ public with sharing class AssortmentBuilderController {
     @AuraEnabled public Decimal unitPrice;
     @AuraEnabled public Decimal listPrice;
     @AuraEnabled public String currencyIsoCode;
-    @AuraEnabled public String error;
-  }
-
-  public class CartLine {
-    @AuraEnabled public String productId { get; set; }
-    @AuraEnabled public Integer quantity { get; set; }
-  }
-
-  public class AddResult {
-    @AuraEnabled public Integer itemsAdded;
-    @AuraEnabled public String cartId;
     @AuraEnabled public String error;
   }
 
@@ -64,46 +54,6 @@ public with sharing class AssortmentBuilderController {
       out.add(pr);
     }
     return out;
-  }
-
-  @AuraEnabled
-  public static AddResult addToCart(
-      String webstoreId, String effectiveAccountId, List<CartLine> items) {
-    AddResult result = new AddResult();
-    result.itemsAdded = 0;
-    if (items == null || items.isEmpty()) {
-      return result;
-    }
-    webstoreId = resolveWebstoreId(webstoreId);
-    if (Test.isRunningTest()) {
-      return result; // ConnectApi cart is not callable in a test context
-    }
-    String cartId;
-    Integer added = 0;
-    for (CartLine line : items) {
-      if (line.quantity == null || line.quantity < 1) {
-        continue;
-      }
-      try {
-        ConnectApi.CartItemInput ci = new ConnectApi.CartItemInput();
-        ci.productId = line.productId;
-        ci.quantity = String.valueOf(line.quantity);
-        ci.type = ConnectApi.CartItemType.Product;
-        ConnectApi.CartItem item =
-          ConnectApi.CommerceCart.addItemToCart(webstoreId, effectiveAccountId, 'active', ci);
-        if (item != null) {
-          cartId = item.cartId;
-        }
-        added++;
-      } catch (Exception e) {
-        if (result.error == null) {
-          result.error = e.getMessage();
-        }
-      }
-    }
-    result.itemsAdded = added;
-    result.cartId = cartId;
-    return result;
   }
 
   // Resolve the webstore from the running Experience Site when the client did not pass one.

@@ -53,8 +53,17 @@ compute the running total client-side as Σ(unitPrice × qty). Promotions remain
   (`ConnectApi.CartItemType.Product`).
 - `activeCartOrId` = `'active'`.
 
-**Consequence:** `addToCart` loops the singular call once per non-zero variant inside one
-`@AuraEnabled` method (one client round-trip). Not atomic — returns count added + first error.
+**⚠️ The server-side path does NOT bind to the existing cart.** Calling
+`ConnectApi.CommerceCart.addItemToCart(..., 'active', ...)` from Apex adds to an empty cart
+but, when the shopper already has a cart, throws *"A new cart can be created only when there
+are no current carts"* — the `'active'` keyword resolves to "create a new cart" rather than
+the shopper's current one. Observed live on the vest PDP with a non-empty cart.
+
+**Resolution — add on the client, not in Apex.** The storefront-native `commerce/cartApi`
+`addItemToCart(productId, quantity)` (Promise) binds to the shopper's active cart the same
+way the OOTB Add-to-Cart button and the in-repo `epRecommendedProductCard` do. The component
+loops it once per non-zero cell (sequentially, to avoid racing the single cart). There is no
+Apex cart method — the controller is pricing-only.
 
 ## PDP product context
 
@@ -67,7 +76,9 @@ navigation to `Product2`.
 - R1 — `getVariantPrices(webstoreId, effectiveAccountId, List<String> productIds)` (no qty);
   total computed client-side. Honors buyer price adjustments; quantity-break + promotions
   documented as not-applicable / cart-time.
-- R2 — `addToCart` loops singular `addItemToCart`; returns `{itemsAdded, cartId, error}`, non-atomic.
+- R2 — add-to-cart is client-side via `commerce/cartApi.addItemToCart(productId, quantity)`,
+  looped once per non-zero cell (binds to the active cart). Non-atomic; the component counts
+  successes/failures and keeps quantities on anything short of full success. No Apex cart path.
 - R3 — `normalizeAxes(variationAttributeInfo, mappings)`: axis order from the mappings'
   `selectedAttributes[].sequence`; value lists from `availableValues`.
 - R4 — honor top-level `purchaseQuantityRule` (min/max/increment) on the qty inputs when present.
