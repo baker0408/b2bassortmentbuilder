@@ -1,0 +1,13 @@
+{
+  "name": "b2bassortmentbuilder",
+  "version": "1.0.0",
+  "description": "B2B Commerce assortment builder LWC for variation products",
+  "license": "MIT",
+  "scripts": {
+    "test": "sfdx-lwc-jest",
+    "test:watch": "sfdx-lwc-jest --watch"
+  },
+  "devDependencies": {
+    "@salesforce/sfdx-lwc-jest": "^5.1.0"
+  }
+}

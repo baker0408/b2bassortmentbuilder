@@ -1,0 +1,7 @@
+node_modules/
+.sfdx/
+.sf/
+.localdevserver/
+*.log
+.DS_Store
+scripts/_out/
