@@ -39,6 +39,10 @@ export default class AssortmentBuilder extends LightningElement {
   qtyRule = null; // purchaseQuantityRule or null
   currencyIso = "USD";
   _busy = false;
+  _variantIds = []; // mapped child ids awaiting a price fetch
+  _pricedCtxKey = null; // webstoreId|effectiveAccountId the current prices were fetched for
+  _sessionEmitted = false;
+  _appEmitted = false;
 
   @wire(CurrentPageReference)
   wiredPage(ref) {
@@ -46,11 +50,23 @@ export default class AssortmentBuilder extends LightningElement {
     this._resolvedProductId = this.productId || fromPage;
   }
 
+  // Function wires (not property wires): we must react when the buyer context
+  // resolves, since pricing is buyer-aware and the wires can emit after the product
+  // loads. Pricing is held until BOTH have emitted, then refetched if the context
+  // (store or effective account) changes.
   @wire(SessionContextAdapter)
-  session;
+  wiredSession(result) {
+    this.session = result;
+    this._sessionEmitted = true;
+    this.tryLoadPrices();
+  }
 
   @wire(AppContextAdapter)
-  appCtx;
+  wiredApp(result) {
+    this.appCtx = result;
+    this._appEmitted = true;
+    this.tryLoadPrices();
+  }
 
   @wire(ProductAdapter, { productId: "$_resolvedProductId" })
   wiredProduct({ data, error }) {
@@ -84,12 +100,28 @@ export default class AssortmentBuilder extends LightningElement {
       variationInfo.variationAttributeInfo,
       variationInfo.attributesToProductMappings
     );
-    this.variantMap = buildVariantMap(this.axes, variationInfo.attributesToProductMappings);
+    // Key the variant map over the SAME capped axis set the grid resolves against
+    // (displayAxes), so a 3+ axis product collapses to an orderable 2-axis grid
+    // instead of an all-unavailable one.
+    this.variantMap = buildVariantMap(
+      this.displayAxes,
+      variationInfo.attributesToProductMappings
+    );
     this.qtyRule = variationInfo.purchaseQuantityRule || null;
-    const ids = Object.values(this.variantMap);
-    if (ids.length) {
-      this.loadPrices(ids);
+    // Price every mapped child (buyer-aware), but defer until the buyer context is ready.
+    this._variantIds = Array.from(new Set(Object.values(this.variantMap)));
+    this.tryLoadPrices();
+  }
+
+  // The axes actually laid out on the grid, capped at two (X then Y) in display order.
+  // For 1-2 axis products this is just `axes`; for 3+ it is the first two, honoring swap.
+  get displayAxes() {
+    if (this.axes.length <= 2) {
+      return this.axes;
     }
+    const first = this.axes[0];
+    const second = this.axes[1];
+    return this.swapAxes ? [second, first] : [first, second];
   }
 
   get effectiveAccountId() {
@@ -137,7 +169,7 @@ export default class AssortmentBuilder extends LightningElement {
         if (yAxis.apiName) {
           valuesByApi[yAxis.apiName] = rv.value;
         }
-        const childId = resolveVariantId(this.variantMap, this.axes, valuesByApi);
+        const childId = resolveVariantId(this.variantMap, this.displayAxes, valuesByApi);
         const price = childId && this.prices[childId];
         return {
           key: `${rv.value}|${cv.value}`,
@@ -179,6 +211,20 @@ export default class AssortmentBuilder extends LightningElement {
     this.quantities = { ...this.quantities, [childId]: next };
   }
 
+  // Fetch prices once the buyer context is known, and again whenever it changes.
+  // Gating on both wires avoids pricing against a null (guest) account on first render.
+  tryLoadPrices() {
+    if (!this._sessionEmitted || !this._appEmitted || !this._variantIds.length) {
+      return;
+    }
+    const ctxKey = `${this.webstoreId}|${this.effectiveAccountId}`;
+    if (ctxKey === this._pricedCtxKey) {
+      return;
+    }
+    this._pricedCtxKey = ctxKey;
+    this.loadPrices(this._variantIds);
+  }
+
   loadPrices(productIds) {
     getVariantPrices({
       webstoreId: this.webstoreId,
@@ -215,27 +261,50 @@ export default class AssortmentBuilder extends LightningElement {
       items,
     })
       .then((res) => {
+        // Apex addToCart catches per-line failures and resolves normally (never throws),
+        // so success is NOT implied by reaching .then — it's implied by itemsAdded.
+        this._busy = false;
         refreshCartSummary();
-        Toast.show(
-          {
-            label: "Added to cart",
-            message: `${res && res.itemsAdded ? res.itemsAdded : items.length} item(s) added.`,
-            variant: "success",
-          },
-          this
-        );
-        this.handleClear();
+        const requested = items.length;
+        const added = res && typeof res.itemsAdded === "number" ? res.itemsAdded : 0;
+        const err = (res && res.error) || "";
+        if (added >= requested && !err) {
+          // full success — safe to clear the grid
+          Toast.show(
+            { label: "Added to cart", message: `${added} item(s) added.`, variant: "success" },
+            this
+          );
+          this.handleClear();
+        } else if (added > 0) {
+          // partial — keep quantities so the buyer can retry the failed lines
+          Toast.show(
+            {
+              label: "Partially added",
+              message: `${added} of ${requested} item(s) added.${err ? ` ${err}` : ""}`,
+              variant: "warning",
+            },
+            this
+          );
+        } else {
+          // nothing added — surface the error, keep quantities
+          Toast.show(
+            {
+              label: "Couldn't add to cart",
+              message: err || "No items were added. Please try again.",
+              variant: "error",
+            },
+            this
+          );
+        }
       })
       .catch((e) => {
         // eslint-disable-next-line no-console
         console.error("assortmentBuilder add to cart failed", e);
+        this._busy = false;
         Toast.show(
           { label: "Couldn't add to cart", message: "Please try again.", variant: "error" },
           this
         );
-      })
-      .finally(() => {
-        this._busy = false;
       });
   }
 
