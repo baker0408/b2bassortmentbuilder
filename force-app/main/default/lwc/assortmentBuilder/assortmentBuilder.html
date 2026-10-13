@@ -1,0 +1,54 @@
+<template>
+  <div class="ab-container">
+    <h2 class="ab-heading">{heading}</h2>
+    <template lwc:if={tooManyAxes}>
+      <p class="ab-note">This product has more than two options; showing the first two.</p>
+    </template>
+    <template lwc:if={hasGrid}>
+      <table class="ab-grid">
+        <thead>
+          <tr>
+            <th class="ab-corner"></th>
+            <template for:each={xAxis.values} for:item="cv">
+              <th class="ab-col" key={cv.value}>{cv.label}</th>
+            </template>
+          </tr>
+        </thead>
+        <tbody>
+          <template for:each={rows} for:item="row">
+            <tr key={row.key}>
+              <th class="ab-row-label" scope="row">{row.label}</th>
+              <template for:each={row.cells} for:item="cell">
+                <td class="ab-cell" key={cell.key}>
+                  <template lwc:if={cell.available}>
+                    <input
+                      class="ab-qty"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={cell.qty}
+                      data-child-id={cell.childId}
+                      onchange={handleQtyChange}
+                    />
+                    <span class="ab-price">{cell.priceLabel}</span>
+                  </template>
+                  <template lwc:else>
+                    <span class="ab-unavailable">—</span>
+                  </template>
+                </td>
+              </template>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <div class="ab-footer">
+        <span class="ab-total">Total: {runningTotalLabel}</span>
+        <button class="ab-add" onclick={handleAddToCart} disabled={addDisabled}>Add to Cart</button>
+        <template lwc:if={showClear}>
+          <button class="ab-clear" onclick={handleClear}>Clear</button>
+        </template>
+      </div>
+      <p class="ab-promo-note">Promotions are applied at checkout.</p>
+    </template>
+  </div>
+</template>

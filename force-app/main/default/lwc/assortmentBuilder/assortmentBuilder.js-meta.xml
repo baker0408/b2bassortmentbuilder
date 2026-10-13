@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <isExposed>true</isExposed>
+    <masterLabel>Assortment Builder</masterLabel>
+    <description>Quantity matrix for a variation product: grid of variants with per-cell quantity + price, running total, and bulk add to cart.</description>
+    <targets>
+        <target>lightningCommunity__Page</target>
+        <target>lightningCommunity__Default</target>
+    </targets>
+    <targetConfigs>
+        <targetConfig targets="lightningCommunity__Default">
+            <property name="heading" type="String" label="Heading" default="Build Your Order" />
+            <property name="productId" type="String" label="Product ID (optional override)" />
+            <property name="swapAxes" type="Boolean" label="Swap grid axes (X/Y)" default="false" />
+            <property name="hideClear" type="Boolean" label="Hide Clear button" default="false" />
+        </targetConfig>
+    </targetConfigs>
+</LightningComponentBundle>
